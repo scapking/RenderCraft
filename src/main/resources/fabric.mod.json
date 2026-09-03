@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "rendcraft",
+  "version": "${version}",
+  "name": "RenderCraft",
+  "description": "Modular Wayland/X11 desktop compositor for Minecraft — architecture-agnostic window rendering with protocol-agnostic design",
+  "authors": [
+    "scapking"
+  ],
+  "contact": {
+    "homepage": "https://github.com/scapking/RenderCraft"
+  },
+  "license": "MIT",
+  "icon": "assets/rendcraft/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.scapking.rendcraft.RenderCraftCommon"
+    ],
+    "client": [
+      "dev.scapking.rendcraft.RenderCraftClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~26.1.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
