@@ -235,7 +235,11 @@ public final class RcCommandTree {
 
     private static final class Arg {
         static String str(CommandContext<CommandSource> ctx, String name) {
-            return ctx.getArgument(name, String.class);
+            String value = ctx.getArgument(name, String.class);
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException("参数 '" + name + "' 不能为空");
+            }
+            return value;
         }
 
         static int integer(CommandContext<CommandSource> ctx, String name) {
