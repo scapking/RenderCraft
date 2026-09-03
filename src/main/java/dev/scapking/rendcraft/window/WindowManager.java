@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 窗口状态机实现。
@@ -23,13 +24,20 @@ public class WindowManager implements EnvironmentAccessor {
 
     private final Map<WindowHandle, WindowState> windowStates = new ConcurrentHashMap<>();
     private final Map<WindowHandle, WindowMetadata> windowMetadata = new ConcurrentHashMap<>();
-    private ProtocolBackend backend;
+    private volatile ProtocolBackend backend;
+    private final ReentrantLock backendLock = new ReentrantLock();
 
     public WindowManager() {
     }
 
     public void setBackend(ProtocolBackend backend) {
-        this.backend = backend;
+        backendLock.lock();
+        try {
+            this.backend = backend;
+            LOGGER.info("Backend set for WindowManager");
+        } finally {
+            backendLock.unlock();
+        }
     }
 
     public boolean registerWindow(WindowHandle handle, WindowMetadata metadata) {
@@ -52,11 +60,28 @@ public class WindowManager implements EnvironmentAccessor {
 
     public void setState(WindowHandle handle, WindowState newState) {
         WindowState oldState = windowStates.getOrDefault(handle, WindowState.NONE);
+        if (!isValidTransition(oldState, newState)) {
+            LOGGER.warn("Invalid state transition: {} -> {} (handle: {})", oldState, newState, handle);
+            return;
+        }
         if (oldState == newState) {
             return;
         }
         LOGGER.info("Window state transition: {} -> {} (handle: {})", oldState, newState, handle);
         windowStates.put(handle, newState);
+    }
+
+    private boolean isValidTransition(WindowState from, WindowState to) {
+        // 定义合法的状态转换
+        return switch (from) {
+            case NONE -> to == WindowState.REGISTERED || to == WindowState.ACTIVE;
+            case REGISTERED -> to == WindowState.ACTIVE || to == WindowState.CLOSING;
+            case CREATING -> to == WindowState.ACTIVE || to == WindowState.CLOSING;
+            case ACTIVE -> to == WindowState.HIDDEN || to == WindowState.CLOSING;
+            case HIDDEN -> to == WindowState.ACTIVE || to == WindowState.CLOSING;
+            case CLOSING -> to == WindowState.DESTROYED;
+            case DESTROYED -> false;
+        };
     }
 
     public void requestClose(WindowHandle handle) {
@@ -73,9 +98,9 @@ public class WindowManager implements EnvironmentAccessor {
         } catch (ProtocolException e) {
             LOGGER.error("Failed to close window via backend: {}", handle, e);
         } finally {
-            setState(handle, WindowState.DESTROYED);
-            windowMetadata.remove(handle);
             windowStates.remove(handle);
+            windowMetadata.remove(handle);
+            LOGGER.info("Window closed and removed: {}", handle);
         }
     }
 
