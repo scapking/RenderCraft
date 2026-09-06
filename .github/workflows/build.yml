@@ -131,3 +131,134 @@ jobs:
           if ! java -cp "/tmp/rendx11-check:$CP" Check; then
             echo "::warning::Smoke test runtime failed; not a build issue."
           fi
+
+  # Cut a GitHub Release whenever a v* tag is pushed. Depends on the
+  # build matrix + verify-x11 so we never publish jars that did not
+  # pass CI. Mirrors the release: job in scapking/waylandcraft's
+  # .github/workflows/build.yml.
+  release:
+    needs: [build-java, verify-x11]
+    runs-on: ubuntu-24.04
+    # Only fire on tag pushes and on manual dispatch with an explicit
+    # tag override. Branch pushes still run the build matrix; they
+    # just skip the release step.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        || github.event_name == 'workflow_dispatch' && inputs.tag != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fetch history + tags so release notes can diff commits
+          # against the previous release tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -e
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v*) ;;
+            *) echo "Refusing to release under '$TAG' (does not start with v)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: $TAG"
+
+      - name: Read mod_version
+        id: ver
+        run: |
+          # Source of truth: gradle.properties. Stays in lock-step with
+          # what the jars were built from.
+          VERSION=$(grep '^mod_version=' gradle.properties | cut -d= -f2)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "mod_version=$VERSION"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: jars
+          pattern: rendcraft-jar-*
+          merge-multiple: true
+
+      - name: List and rename jars
+        run: |
+          set -e
+          ls -la jars/
+          echo
+          echo "=== final asset names ==="
+          for f in jars/*.jar; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            # Build job uploads as rendcraft-jar-<os>-jdk<java>; we
+            # rewrite to rendcraft-<version>-<os>.jar here so the
+            # release assets are version-tagged and the matrix column
+            # (jdk21 vs jdk23) is dropped — for a release we only
+            # care about the highest-tested per-OS build.
+            os=$(echo "$name" | sed -E 's/^rendcraft-jar-(.+)-jdk[0-9]+\.jar$/\1/')
+            mv "$f" "jars/rendcraft-${{ steps.ver.outputs.version }}-${os}.jar"
+          done
+          ls -la jars/
+          echo
+          echo "=== final sha256 ==="
+          sha256sum jars/*.jar
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -e
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          {
+            echo "## 变更内容 / Changes"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "Since \`${PREV}\`:"
+              echo
+              git log --pretty=format:'- `%h` %s' --no-merges "${PREV}..${TAG}" || true
+            else
+              echo "First release, or no previous tag found; showing the last 30 commits on ${TAG}:"
+              echo
+              git log --pretty=format:'- `%h` %s' --no-merges -30 "${TAG}" || true
+            fi
+            echo
+            echo
+            echo "---"
+            echo
+            echo "## 平台与产物 / Platforms & Artifacts"
+            echo
+            echo "RenderCraft ships a single universal mod jar; the same jar"
+            echo "runs on every platform with a Fabric Loader that matches the"
+            echo "version pinned in gradle.properties."
+            echo
+            echo "- Linux (x86_64, arm64): drop into .minecraft/mods"
+            echo "- Windows (x86_64, arm64): drop into %APPDATA%/.minecraft/mods"
+            echo "- macOS (x86_64, arm64): drop into ~/Library/Application Support/minecraft/mods"
+            echo "- Android: pair with fabric-loader-android (e.g. OnyxLauncher)"
+            echo "- iOS: not yet supported (no fabric-loader-ios upstream)"
+            echo
+            echo "源码包 / Source archives: zip + tar.gz are attached automatically by GitHub."
+          } > release-notes.md
+          echo "=== release-notes.md ==="
+          cat release-notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -e
+          cd jars
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists, updating notes + uploading assets (clobber)"
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --notes-file "${GITHUB_WORKSPACE}/release-notes.md"
+            gh release upload "${TAG}" *.jar --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            echo "Creating release ${TAG}"
+            gh release create "${TAG}" *.jar --repo "${GITHUB_REPOSITORY}" \
+                --title "${TAG}" --notes-file "${GITHUB_WORKSPACE}/release-notes.md"
+          fi
