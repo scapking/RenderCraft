@@ -197,7 +197,11 @@ jobs:
         # so we end up with a flat jars/<name>/<file> structure that
         # the rename step can iterate cleanly.
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          # gh run download needs the token under the GH_TOKEN name;
+          # GitHub Actions exposes the workflow token as GITHUB_TOKEN,
+          # so we re-export it.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_HOST: ${{ github.api_url | replace('api.github.com', 'github.com') }}
         run: |
           set -e
           mkdir -p jars
