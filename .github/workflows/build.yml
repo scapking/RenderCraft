@@ -21,13 +21,6 @@ jobs:
   # Android/iOS are intentionally omitted: loom 1.13-SNAPSHOT does not produce
   # usable jars for them and Fabric Loader for those platforms is still
   # experimental — track in a separate workflow once the toolchain stabilises.
-
-  # Job-level permissions. The release job uses 'gh run download' to
-  # pull artefacts from sibling jobs, which needs actions: read in
-  # addition to the workflow-level contents: write above.
-  permissions:
-    contents: write
-    actions: read
   build-java:
     strategy:
       fail-fast: false
