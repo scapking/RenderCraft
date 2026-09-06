@@ -68,8 +68,13 @@ jobs:
       - name: Upload jar
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
+        # Artifact names use the 'rendcraft-jar-<os>-jdk<java>' prefix
+        # so the release job can pull them all with a single pattern
+        # match. The release job will rename them to
+        # rendcraft-<mod_version>-<os>.jar before creating the GitHub
+        # Release.
         with:
-          name: rendcraft-${{ matrix.os }}-jdk${{ matrix.java }}
+          name: rendcraft-jar-${{ matrix.os }}-jdk${{ matrix.java }}
           path: build/libs/*.jar
           if-no-files-found: error
           retention-days: 14
