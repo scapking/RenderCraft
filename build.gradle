@@ -12,7 +12,13 @@ repositories {
 
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    // Mojang-official mappings are used here (rather than yarn) because they
+    // match the symbol names that fabric-api's published javadoc uses
+    // (e.g. net.minecraft.commands.CommandSourceStack, Component, etc.).
+    // Trading mod-side readability for a single source of truth across
+    // the fabric ecosystem makes the mod easier to keep in sync with
+    // fabric-api upgrades.
+    mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
@@ -20,6 +26,12 @@ dependencies {
     implementation "net.java.dev.jna:jna:5.16.0"
     implementation "net.java.dev.jna:jna-platform:5.16.0"
 }
+
+// Source sets: leave the default main-only layout. Splitting client-only
+// classes is a nice-to-have but the server-only references in
+// SpatialAudioTransmissionService (net.minecraft.server.level.ServerLevel)
+// work fine in the merged main source set, so we keep the layout simple
+// until a real client/server split is required.
 
 processResources {
     inputs.property "version", project.version

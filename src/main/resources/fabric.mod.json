@@ -19,6 +19,9 @@
     ],
     "client": [
       "dev.scapking.rendcraft.RenderCraftClient"
+    ],
+    "server": [
+      "dev.scapking.rendcraft.RenderCraftServer"
     ]
   },
   "depends": {

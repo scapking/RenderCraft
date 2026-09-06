@@ -31,3 +31,4 @@ research/
 
 # Working docs scratch (kept locally, do not push until reviewed)
 docs/_scratch/
+.attach_pid*
