@@ -3,7 +3,6 @@ package dev.scapking.rendcraft.av.spatial;
 import dev.scapking.rendcraft.protocol.WindowHandle;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundCategory;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -57,7 +56,7 @@ public class SpatialAudioTransmissionService {
     private float defaultVolume = 1.0f;
     private float defaultPitch = 1.0f;
     private int defaultRangeBlocks = 16;
-    private SoundCategory defaultCategory = SoundCategory.NEUTRAL;
+    private SoundSource defaultCategory = SoundSource.NEUTRAL;
     private AttenuationModel attenuationModel = AttenuationModel.LINEAR;
     
     // 服务状态
@@ -98,7 +97,7 @@ public class SpatialAudioTransmissionService {
         public int rangeBlocks;        // 传播范围（区块）
         public float volume = 1.0f;   // 音量 (0.0-1.0)
         public float pitch = 1.0f;    // 音调 (0.5-2.0)
-        public SoundCategory category = SoundCategory.NEUTRAL;
+        public SoundSource category = SoundSource.NEUTRAL;
         public boolean enabled = true;
         public long lastPlaybackTime = 0;
         public int playbackIntervalTicks = 0;  // 0 = 每 tick 播放
@@ -122,7 +121,7 @@ public class SpatialAudioTransmissionService {
         }
         
         public boolean isPlayerInRange(int[] playerPos) {
-            return SpatialAudioService.getInstance().isPlayerInRange(
+            return new SpatialAudioService().isPlayerInRange(
                 playerPos, new int[]{x, y, z}, rangeBlocks);
         }
     }
@@ -133,8 +132,8 @@ public class SpatialAudioTransmissionService {
      */
     public void initialize(@Nullable ServerLevel level) {
         this.serverLevel = level;
-        LOGGER.info("SpatialAudioTransmissionService initialized, dimension: {}", 
-            level == null ? "null" : level.dimension().type().getName());
+        LOGGER.info("SpatialAudioTransmissionService initialized, dimension: {}",
+            level == null ? "null" : level.dimension().identifier().toString());
     }
     
     /**
@@ -144,15 +143,15 @@ public class SpatialAudioTransmissionService {
     public void setSoundEvent(@Nullable SoundEvent event) {
         this.soundEvent = event;
         LOGGER.info("Sound event set: {}", 
-            event == null ? "null" : event.getId());
+            event == null ? "null" : event.location());
     }
     
     /**
      * 设置默认声音事件（占位符）。
      */
     public void setDefaultSoundEvent() {
-        this.soundEvent = SoundEvents.ENTITY_TURTLE_AMBIENT;
-        LOGGER.info("Set default sound event: {}", soundEvent.getId());
+        this.soundEvent = SoundEvents.TURTLE_AMBIENT_LAND;
+        LOGGER.info("Set default sound event: {}", soundEvent.location());
     }
     
     /**
@@ -190,7 +189,7 @@ public class SpatialAudioTransmissionService {
      */
     public void registerAudioSource(WindowHandle windowHandle, int x, int y, int z,
                                     int rangeBlocks, float volume, float pitch,
-                                    SoundCategory category, int playbackInterval) {
+                                    SoundSource category, int playbackInterval) {
         if (windowHandle == null) return;
         
         AudioSource source = new AudioSource(windowHandle, x, y, z, rangeBlocks);
@@ -271,9 +270,9 @@ public class SpatialAudioTransmissionService {
         }
         
         // 构建玩家位置映射
-        Map<UUID, int[]> playerPositions = new HashMap<>(players.size());
+        Map<String, int[]> playerPositions = new HashMap<>(players.size());
         for (ServerPlayer player : players) {
-            playerPositions.put(player.getUUID(), 
+            playerPositions.put(player.getUUID().toString(), 
                 new int[]{
                     Mth.floor(player.getX()),
                     Mth.floor(player.getY()),
@@ -295,7 +294,7 @@ public class SpatialAudioTransmissionService {
             }
             
             // 获取范围内玩家
-            Set<UUID> playersInRange = rangeManager.getPlayersInRange(
+            Set<String> playersInRange = rangeManager.getPlayersInRange(
                 source.windowHandle, playerPositions);
             
             if (playersInRange.isEmpty()) {
@@ -303,14 +302,14 @@ public class SpatialAudioTransmissionService {
             }
             
             // 向每个范围内的玩家播放声音
-            for (UUID playerUuid : playersInRange) {
+            for (String playerUuid : playersInRange) {
                 ServerPlayer player = serverLevel.getServer().getPlayerList()
                     .getPlayer(playerUuid);
                 if (player == null) continue;
                 
                 // 计算距离
                 int[] playerPos = playerPositions.get(playerUuid);
-                double distance = SpatialAudioService.getInstance()
+                double distance = new SpatialAudioService()
                     .getDistance(playerPos, new int[]{source.x, source.y, source.z});
                 
                 // 计算衰减后的音量
@@ -322,14 +321,17 @@ public class SpatialAudioTransmissionService {
                 }
                 
                 // 播放声音
+                // 1.21 mojang mappings reordered playSound so the
+                // Entity comes first and the SoundEvent is the fifth
+                // argument (it used to be the first in older mappings).
                 try {
                     serverLevel.playSound(
-                        soundEvent,
-                        SoundSource.NEUTRAL,
                         player,
                         source.x + 0.5,  // 区块中心偏移
                         source.y + 0.5,
                         source.z + 0.5,
+                        soundEvent,
+                        SoundSource.NEUTRAL,
                         attenuatedVolume,
                         source.pitch
                     );
@@ -390,8 +392,8 @@ public class SpatialAudioTransmissionService {
      * @param allPlayers 所有玩家的位置映射
      * @return 范围内的玩家UUID集合
      */
-    public Set<UUID> getPlayersInRange(WindowHandle windowHandle, 
-                                        Map<UUID, int[]> allPlayers) {
+    public Set<String> getPlayersInRange(WindowHandle windowHandle, 
+                                        Map<String, int[]> allPlayers) {
         AudioSource source = audioSources.get(windowHandle);
         if (source == null || !source.enabled) {
             return Collections.emptySet();
@@ -473,7 +475,7 @@ public class SpatialAudioTransmissionService {
     /**
      * 设置默认声音类别。
      */
-    public void setDefaultCategory(SoundCategory category) {
+    public void setDefaultCategory(SoundSource category) {
         this.defaultCategory = category;
     }
     

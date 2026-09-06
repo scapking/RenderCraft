@@ -52,7 +52,9 @@ dependencies {
 // loom 1.13 isolates mod dependencies away from the main Minecraft
 // source set, but a plain Java source set is unaffected.
 sourceSets.main.java {
-    exclude 'dev/scapking/rendcraft/av/spatial/**'
+    // av/spatial was temporarily excluded while its 1.21.11 mojang
+    // mapping audit was in progress. The fixes landed in this commit,
+    // so the exclude is removed and the package compiles cleanly.
 }
 // Wire dbus-java onto the dbusClient source set via `dependencies`
 // directly. Unlike the `compileClasspath += files(...)` approach,
