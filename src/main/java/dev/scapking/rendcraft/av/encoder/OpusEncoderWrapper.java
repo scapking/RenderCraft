@@ -3,6 +3,8 @@ package dev.scapking.rendcraft.av.encoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
+
 /**
  * Opus 编码器包装器.
  * 使用 Java 库或 JNI 调用 libopus 进行音频编码.

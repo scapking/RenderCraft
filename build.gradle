@@ -33,15 +33,13 @@ dependencies {
 // work fine in the merged main source set, so we keep the layout simple
 // until a real client/server split is required.
 //
-// The skeleton AV/sync/spatial classes are large (~1500 LoC) and were
-// authored against an older mojang-mappings snapshot. Until they are
-// re-validated against 1.21.11 they are excluded from compilation so
-// that the protocol / IME / window layer can be built and CI'd cleanly.
-// Each excluded file ends up re-enabled as the bugs are flushed out.
+// The av/encoder package is pure Java (no Minecraft imports) and
+// compiled cleanly once the FrameType import was added; re-enabled.
+// av/spatial/ still references server-only / sound APIs that need a
+// full audit (SoundEvent.getId vs .getLocation, Map<UUID,int[]>, etc.),
+// so it stays excluded until that audit lands.
 sourceSets.main.java {
     exclude 'dev/scapking/rendcraft/av/spatial/**'
-    exclude 'dev/scapking/rendcraft/av/sync/**'
-    exclude 'dev/scapking/rendcraft/av/encoder/**'
 }
 
 processResources {

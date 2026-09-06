@@ -8,6 +8,13 @@ import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
+import dev.scapking.rendcraft.RenderCraftRuntime;
+import dev.scapking.rendcraft.protocol.FrameSnapshot;
+import dev.scapking.rendcraft.protocol.ProtocolException;
+import dev.scapking.rendcraft.protocol.ProtocolType;
+import dev.scapking.rendcraft.protocol.WindowHandle;
+import dev.scapking.rendcraft.protocol.WindowMetadata;
+import dev.scapking.rendcraft.protocol.X11Adapter;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
@@ -212,22 +219,178 @@ public final class RcCommandTree {
     // manager/encoder lands.
     // ------------------------------------------------------------------
 
-    private static int listWindows(CommandContext<CommandSourceStack> ctx) { return 0; }
-    private static int captureWindow(CommandContext<CommandSourceStack> ctx, String handle) { return 0; }
-    private static int showAllWindows(CommandContext<CommandSourceStack> ctx) { return 0; }
-    private static int showHiddenWindows(CommandContext<CommandSourceStack> ctx) { return 0; }
-    private static int hideAllWindows(CommandContext<CommandSourceStack> ctx) { return 0; }
-    private static int hideVisibleWindows(CommandContext<CommandSourceStack> ctx) { return 0; }
-    private static int giveWindow(CommandContext<CommandSourceStack> ctx, String handle) { return 0; }
-    private static int grabWindow(CommandContext<CommandSourceStack> ctx, String handle) { return 0; }
-    private static int resizeWindow(CommandContext<CommandSourceStack> ctx, String handle, int w, int h) { return 0; }
-    private static int moveWindow(CommandContext<CommandSourceStack> ctx, String handle, double x, double y, double z) { return 0; }
-    private static int rotateWindow(CommandContext<CommandSourceStack> ctx, String handle, double angle) { return 0; }
-    private static int pinWindow(CommandContext<CommandSourceStack> ctx, String handle) { return 0; }
-    private static int unpinWindow(CommandContext<CommandSourceStack> ctx, String handle) { return 0; }
-    private static int closeWindow(CommandContext<CommandSourceStack> ctx, String handle) { return 0; }
-    private static int listX11Windows(CommandContext<CommandSourceStack> ctx) { return 0; }
-    private static int shareX11Window(CommandContext<CommandSourceStack> ctx, int index) { return 0; }
+    private static int listWindows(CommandContext<CommandSourceStack> ctx) {
+        try {
+            RenderCraftRuntime.refreshWindows();
+            WindowHandle[] handles =
+                    RenderCraftRuntime.getWindowManager().listWindows();
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "RenderCraft: " + handles.length + " window(s) known"), true);
+            for (WindowHandle h : handles) {
+                WindowMetadata m =
+                        RenderCraftRuntime.getWindowManager().getMetadata(h);
+                if (m != null) {
+                    ctx.getSource().sendSuccess(() -> Component.literal(
+                            "  " + h.getId() + " :: " + m.getTitle()
+                                    + " (" + m.getWidth() + "x" + m.getHeight() + ", "
+                                    + (m.isVisible() ? "visible" : "hidden") + ")"), true);
+                }
+            }
+            return handles.length;
+        } catch (ProtocolException e) {
+            ctx.getSource().sendFailure(Component.literal("listWindows failed: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int captureWindow(CommandContext<CommandSourceStack> ctx, String handle) {
+        try {
+            WindowHandle h =
+                    new WindowHandle(handle, ProtocolType.X11);
+            FrameSnapshot snap =
+                    RenderCraftRuntime.getWindowManager().captureFrame(h);
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "Captured " + snap.getWidth() + "x" + snap.getHeight()
+                            + " (" + snap.getImageData().length + " bytes)"), true);
+            return 1;
+        } catch (ProtocolException e) {
+            ctx.getSource().sendFailure(Component.literal("captureFrame failed: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int showAllWindows(CommandContext<CommandSourceStack> ctx) {
+        try {
+            WindowHandle[] handles =
+                    RenderCraftRuntime.getWindowManager().listWindows();
+            for (WindowHandle h : handles) {
+                RenderCraftRuntime.getWindowManager().requestShow(h);
+            }
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "Requested show for " + handles.length + " window(s)"), true);
+            return handles.length;
+        } catch (ProtocolException e) {
+            ctx.getSource().sendFailure(Component.literal("show failed: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int showHiddenWindows(CommandContext<CommandSourceStack> ctx) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "show-hidden is a no-op until the protocol backend reports hidden state; "
+                        + "current X11/Wayland adapters do not."), true);
+        return 0;
+    }
+
+    private static int hideAllWindows(CommandContext<CommandSourceStack> ctx) {
+        try {
+            WindowHandle[] handles =
+                    RenderCraftRuntime.getWindowManager().listWindows();
+            for (WindowHandle h : handles) {
+                RenderCraftRuntime.getWindowManager().requestHide(h);
+            }
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "Requested hide for " + handles.length + " window(s)"), true);
+            return handles.length;
+        } catch (ProtocolException e) {
+            ctx.getSource().sendFailure(Component.literal("hide failed: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int hideVisibleWindows(CommandContext<CommandSourceStack> ctx) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "hide-visible is a no-op until the protocol backend reports visible state; "
+                        + "current X11/Wayland adapters do not."), true);
+        return 0;
+    }
+
+    private static int giveWindow(CommandContext<CommandSourceStack> ctx, String handle) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "give: not yet implemented (would push a captured window into the player view)."), true);
+        return 0;
+    }
+
+    private static int grabWindow(CommandContext<CommandSourceStack> ctx, String handle) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "grab: not yet implemented (would attach a window to the player)."), true);
+        return 0;
+    }
+
+    private static int resizeWindow(CommandContext<CommandSourceStack> ctx, String handle, int w, int h) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "resize: backend-driven; no X11/Wayland impl today (handle=" + handle
+                        + ", " + w + "x" + h + ")."), true);
+        return 0;
+    }
+
+    private static int moveWindow(CommandContext<CommandSourceStack> ctx, String handle, double x, double y, double z) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "move: backed by TemplateLayoutManager in a future patch "
+                        + "(handle=" + handle + ", xyz=" + x + "," + y + "," + z + ")."), true);
+        return 0;
+    }
+
+    private static int rotateWindow(CommandContext<CommandSourceStack> ctx, String handle, double angle) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "rotate: not yet implemented (handle=" + handle + ", angle=" + angle + ")."), true);
+        return 0;
+    }
+
+    private static int pinWindow(CommandContext<CommandSourceStack> ctx, String handle) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "pin: not yet implemented (handle=" + handle + ")."), true);
+        return 0;
+    }
+
+    private static int unpinWindow(CommandContext<CommandSourceStack> ctx, String handle) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "unpin: not yet implemented (handle=" + handle + ")."), true);
+        return 0;
+    }
+
+    private static int closeWindow(CommandContext<CommandSourceStack> ctx, String handle) {
+        try {
+            WindowHandle h =
+                    new WindowHandle(handle, ProtocolType.X11);
+            RenderCraftRuntime.getWindowManager().requestClose(h);
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "Requested close for " + handle), true);
+            return 1;
+        } catch (RuntimeException e) {
+            ctx.getSource().sendFailure(Component.literal("close failed: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int listX11Windows(CommandContext<CommandSourceStack> ctx) {
+        try {
+            java.util.List<X11Adapter.WindowInfo> wins =
+                    X11Adapter.listX11Windows(null);
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "X11 enumerated " + wins.size() + " top-level window(s)"), true);
+            for (X11Adapter.WindowInfo w : wins) {
+                ctx.getSource().sendSuccess(() -> Component.literal(
+                        "  0x" + w.hash + " " + w.title
+                                + (w.appId != null ? " [" + w.appId + "]" : "")
+                                + (w.pid > 0 ? " pid=" + w.pid : "")
+                                + " " + w.width + "x" + w.height
+                                + (w.visible ? " visible" : " hidden")), true);
+            }
+            return wins.size();
+        } catch (Throwable t) {
+            ctx.getSource().sendFailure(Component.literal(
+                    "X11 list failed: " + t.getClass().getSimpleName() + ": " + t.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int shareX11Window(CommandContext<CommandSourceStack> ctx, int index) {
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "share: not yet implemented (index=" + index
+                        + "); see /rc share for the planned multi-client API."), true);
+        return 0;
+    }
 
     private static int layoutInit(CommandContext<CommandSourceStack> ctx) { return 0; }
     private static int layoutCube(CommandContext<CommandSourceStack> ctx) { return 0; }
