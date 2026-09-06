@@ -1,5 +1,6 @@
 package dev.scapking.rendcraft.protocol;
 
+import dev.scapking.rendcraft.compositor.CompositorConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

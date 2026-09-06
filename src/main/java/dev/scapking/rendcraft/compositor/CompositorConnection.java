@@ -1,4 +1,4 @@
-package dev.scapking.rendcraft.native;
+package dev.scapking.rendcraft.compositor;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
