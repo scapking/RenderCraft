@@ -15,6 +15,13 @@ on:
 
 permissions:
   contents: write
+  # The release job uses 'gh run download' to pull artefacts from
+  # sibling build jobs; that path needs actions: read in addition to
+  # the workflow-level contents: write above. GITHUB_TOKEN scopes
+  # are derived from this top-level permissions block, so every job
+  # in the workflow gets actions: read without us having to repeat
+  # the block per job.
+  actions: read
 
 jobs:
   # Java-only build matrix covering all major desktop targets we ship jars for.
