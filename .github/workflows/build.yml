@@ -21,7 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-11-arm, macos-14, macos-15]
-        java: ['21', '25']
+        # Temurin 25 is not yet GA on the GitHub Actions setup-java image
+        # at the time of writing (latest is 23.0.2+7). Re-enable 25 once
+        # Temurin publishes an LTS build for it.
+        java: ['21', '23']
     name: build (${{ matrix.os }}, jdk${{ matrix.java }})
     runs-on: ${{ matrix.os }}
     steps:
@@ -33,15 +36,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: temurin
 
-      - name: Setup Gradle
+      - name: Setup Gradle (use system gradle; wrapper is not yet committed)
         uses: gradle/actions/setup-gradle@v4
-
-      - name: Grant execute permission to gradlew (Unix)
-        if: ${{ !startsWith(matrix.os, 'windows') }}
-        run: chmod +x ./gradlew
+        with:
+          # RenderCraft does not commit a gradle wrapper yet; pin to the
+          # version that loom 1.13-SNAPSHOT was developed against and
+          # that GitHub-hosted runners reliably cache.
+          gradle-version: '9.1.0'
 
       - name: Build (${{ matrix.os }}, jdk${{ matrix.java }})
-        run: ./gradlew build --no-daemon --console=plain
+        # gradlew wrapper is not committed; invoke the gradle CLI directly.
+        # setup-gradle above adds the pinned gradle to PATH.
+        run: gradle build --no-daemon --console=plain
 
       - name: Verify jar contents
         if: ${{ !cancelled() }}
@@ -84,7 +90,7 @@ jobs:
           sudo apt-get install -y libx11-6
       - uses: gradle/actions/setup-gradle@v4
       - name: Build mod jar
-        run: ./gradlew build --no-daemon --console=plain
+        run: gradle build --no-daemon --console=plain
       - name: Headless X11 smoke test
         # Use a throwaway class that calls listX11Windows(null). On a
         # headless runner we expect libX11 to load but XOpenDisplay to
