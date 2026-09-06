@@ -20,12 +20,12 @@ public interface ProtocolBackend {
     /**
      * 枚举当前可用的窗口。
      */
-    WindowHandle[] listWindows();
+    WindowHandle[] listWindows() throws ProtocolException;
 
     /**
      * 获取指定窗口的元数据。
      */
-    WindowMetadata getMetadata(WindowHandle handle);
+    WindowMetadata getMetadata(WindowHandle handle) throws ProtocolException;
 
     /**
      * 捕获指定窗口的一帧，返回帧快照。

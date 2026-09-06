@@ -4,6 +4,7 @@ import dev.scapking.rendcraft.compositor.CompositorConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -57,7 +58,7 @@ public class WaylandAdapter implements ProtocolBackend {
     }
 
     @Override
-    public WindowHandle[] listWindows() {
+    public WindowHandle[] listWindows() throws ProtocolException {
         if (!initialized) throw new ProtocolException("WaylandAdapter not initialized");
         if (connection == null || !connection.isConnected()) {
             throw new ProtocolException("WaylandAdapter not connected");
@@ -75,7 +76,7 @@ public class WaylandAdapter implements ProtocolBackend {
     }
 
     @Override
-    public WindowMetadata getMetadata(WindowHandle handle) {
+    public WindowMetadata getMetadata(WindowHandle handle) throws ProtocolException {
         if (!initialized) throw new ProtocolException("WaylandAdapter not initialized");
         LOGGER.debug("getMetadata stub for handle={}", handle);
         return new WindowMetadata(handle, "wayland-title", 1280, 720, true);

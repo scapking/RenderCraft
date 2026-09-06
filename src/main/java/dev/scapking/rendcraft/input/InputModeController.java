@@ -1,6 +1,6 @@
 package dev.scapking.rendcraft.input;
 
-import dev.scapking.rendcraft.window.WindowHandle;
+import dev.scapking.rendcraft.protocol.WindowHandle;
 
 /**
  * 輸入模式轉換執行器。

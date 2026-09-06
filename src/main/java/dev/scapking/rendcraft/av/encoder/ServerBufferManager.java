@@ -2,6 +2,7 @@ package dev.scapking.rendcraft.av;
 
 import dev.scapking.rendcraft.av.buffer.BufferStrategy;
 import dev.scapking.rendcraft.av.buffer.BufferStrategy.Frame;
+import dev.scapking.rendcraft.av.buffer.BufferStrategy.FrameType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,7 +54,7 @@ public class ServerBufferManager {
                 // 缓冲区已满，丢弃最旧的帧 (DROP_OLDEST 策略)
                 bufferStrategy.pop(); // 移除最旧的帧
                 droppedFrames.incrementAndGet();
-                if (frame.getType() == Frame.FrameType.VIDEO) {
+                if (frame.getType() == FrameType.VIDEO) {
                     droppedVideoFrames.incrementAndGet();
                 } else {
                     droppedAudioFrames.incrementAndGet();
@@ -95,8 +96,8 @@ public class ServerBufferManager {
     /**
      * 获取帧容量 (基于帧类型).
      */
-    private int getCapacityForFrameType(Frame.FrameType type) {
-        if (type == Frame.FrameType.VIDEO) {
+    private int getCapacityForFrameType(FrameType type) {
+        if (type == FrameType.VIDEO) {
             return targetVideoBufferSize;
         } else {
             return targetAudioBufferSize;

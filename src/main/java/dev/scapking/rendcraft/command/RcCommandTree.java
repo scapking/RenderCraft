@@ -45,7 +45,7 @@ public final class RcCommandTree {
                 .then(settingSubtree())
                 .then(literal("help").executes(RcCommandTree::help))
                 .then(literal("version").executes(ctx -> {
-                    ctx.getSource().sendFeedback(
+                    ctx.getSource().sendSuccess(
                             () -> Component.literal("RenderCraft 0.1.0"), true);
                     return 1;
                 })));
@@ -272,7 +272,7 @@ public final class RcCommandTree {
     private static int settingSet(CommandContext<CommandSourceStack> ctx, String key, String value) { return 0; }
 
     private static int help(CommandContext<CommandSourceStack> ctx) {
-        ctx.getSource().sendFeedback(() -> Component.literal(
+        ctx.getSource().sendSuccess(() -> Component.literal(
                 "RenderCraft command list:\n"
                         + "  /rc window list | capture <handle> | show | hide | give <handle>\n"
                         + "  /rc window grab <handle> | resize <handle> <w> <h>\n"

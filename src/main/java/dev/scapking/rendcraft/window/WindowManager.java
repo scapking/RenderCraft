@@ -122,7 +122,7 @@ public class WindowManager {
         return backend.captureFrame(handle);
     }
 
-    public WindowHandle[] listWindows() {
+    public WindowHandle[] listWindows() throws ProtocolException {
         if (backend == null) {
             return new WindowHandle[0];
         }

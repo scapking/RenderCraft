@@ -116,7 +116,7 @@ public class BoundedAudioVideoBuffer implements BufferStrategy {
 
     @Override
     public int getDroppedFrames() {
-        return droppedVideoFrames.get() + droppedAudioFrames.get();
+        return (int) Math.min(Integer.MAX_VALUE, droppedVideoFrames.get() + droppedAudioFrames.get());
     }
 
     @Override

@@ -65,7 +65,7 @@ public class TemplateLayoutManager {
     private void applyTemplateInternal(LayoutTemplate template) {
         if (template.getSlotConfig() != null) {
             // 使用约束求解器计算窗口位置
-            List<WindowPosition> positions = constraintSolver.solve(
+            List<ConstraintSolver.PositionSolution> positions = constraintSolver.solve(
                 template.getWindows(),
                 template.getSlotConfig()
             );
@@ -77,7 +77,7 @@ public class TemplateLayoutManager {
         } else {
             // 使用默认布局
             LayoutState state = currentState.get();
-            state.setLayoutActive(true);
+            state.setLayoutEnabled(true);
         }
         LOGGER.info("Applied template: {}", template.getName());
     }
@@ -133,7 +133,7 @@ public class TemplateLayoutManager {
      */
     public void addWindowToLayout(WindowHandle handle) {
         LayoutState state = currentState.get();
-        if (!state.isLayoutInitialized()) {
+        if (!state.isInitialized()) {
             LOGGER.warn("Cannot add window to layout: not initialized");
             return;
         }
@@ -146,9 +146,9 @@ public class TemplateLayoutManager {
             state.getYaw()
         );
         if (solution != null) {
-            currentState.update(state -> {
-                state.getPositions().add(solution);
-                return state;
+            currentState.updateAndGet(s -> {
+                s.getPositions().add(solution);
+                return s;
             });
             LOGGER.info("Added window {} to layout at position {}", handle, solution);
         }
@@ -158,9 +158,9 @@ public class TemplateLayoutManager {
      * 从布局中移除窗口。
      */
     public void removeWindowFromLayout(WindowHandle handle) {
-        currentState.update(state -> {
-            state.getPositions().removeIf(p -> p.getHandle().equals(handle));
-            return state;
+        currentState.updateAndGet(s -> {
+            s.getPositions().removeIf(p -> p.getHandle().equals(handle));
+            return s;
         });
         LOGGER.info("Removed window {} from layout", handle);
     }
@@ -234,9 +234,9 @@ public class TemplateLayoutManager {
             
             // 根据模板类型计算位置
             if (config.getTemplateType() == TemplateLayoutManager.LayoutTemplateType.CUBE) {
-                positions = solveCubeLayout(windows, config);
+                positions = solveCubeLayout(0.0, 0.0, 0.0, 0.0f, windows, config);
             } else if (config.getTemplateType() == TemplateLayoutManager.LayoutTemplateType.SPHERE) {
-                positions = solveSphereLayout(windows, config);
+                positions = solveSphereLayout(0.0, 0.0, 0.0, 0.0f, windows, config);
             }
             
             return positions;
@@ -267,18 +267,18 @@ public class TemplateLayoutManager {
             return null;
         }
         
-        private List<PositionSolution> solveCubeLayout(List<WindowHandle> windows, TemplateSlotConfig config) {
+        private List<PositionSolution> solveCubeLayout(double centerX, double centerY, double centerZ, float yaw, List<WindowHandle> windows, TemplateSlotConfig config) {
             List<PositionSolution> positions = new ArrayList<>();
             int perFace = config.getCubePerFace() != null ? config.getCubePerFace() : 2;
             float radius = config.getRadius() != null ? config.getRadius() : 6.0f;
             float spacing = config.getSpacing() != null ? config.getSpacing() : 0.4f;
-            
+
             int windowIndex = 0;
             for (int face = 0; face < 6 && windowIndex < windows.size(); face++) {
                 for (int slot = 0; slot < perFace && windowIndex < windows.size(); slot++) {
                     PositionSolution pos = createCubePosition(
-                        windows.get(windowIndex), face, slot, 
-                        0.0, 0.0, 0.0, 0.0f, radius, spacing
+                        windows.get(windowIndex), face, slot,
+                        centerX, centerY, centerZ, yaw, radius, spacing
                     );
                     positions.add(pos);
                     windowIndex++;
@@ -286,8 +286,8 @@ public class TemplateLayoutManager {
             }
             return positions;
         }
-        
-        private List<PositionSolution> solveSphereLayout(List<WindowHandle> windows, TemplateSlotConfig config) {
+
+        private List<PositionSolution> solveSphereLayout(double centerX, double centerY, double centerZ, float yaw, List<WindowHandle> windows, TemplateSlotConfig config) {
             List<PositionSolution> positions = new ArrayList<>();
             float radius = config.getRadius() != null ? config.getRadius() : 6.0f;
             float stackSpacing = config.getStackSpacing() != null ? config.getStackSpacing() : 0.4f;

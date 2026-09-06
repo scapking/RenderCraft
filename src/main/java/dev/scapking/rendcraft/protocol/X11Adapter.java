@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -131,7 +132,7 @@ public class X11Adapter implements ProtocolBackend {
     }
 
     @Override
-    public WindowHandle[] listWindows() {
+    public WindowHandle[] listWindows() throws ProtocolException {
         if (!initialized) {
             throw new ProtocolException("X11Adapter not initialized");
         }
@@ -148,13 +149,20 @@ public class X11Adapter implements ProtocolBackend {
     }
 
     @Override
-    public WindowMetadata getMetadata(WindowHandle handle) {
+    public WindowMetadata getMetadata(WindowHandle handle) throws ProtocolException {
         if (!initialized) {
             throw new ProtocolException("X11Adapter not initialized");
         }
+        if (X11_LIB == null) {
+            return new WindowMetadata(handle, "x11-title", 1280, 720, true);
+        }
+        Pointer display = X11_LIB.XOpenDisplay(displayName);
+        if (display == null) {
+            return new WindowMetadata(handle, "x11-title", 1280, 720, true);
+        }
         try {
             long xid = Long.parseUnsignedLong(handle.getId(), 16);
-            WindowInfo w = describeX11Window(displayName, xid);
+            WindowInfo w = describeWindow(display, xid);
             if (w != null) {
                 return new WindowMetadata(handle, w.title, w.width, w.height, w.visible);
             }
@@ -162,6 +170,8 @@ public class X11Adapter implements ProtocolBackend {
             LOGGER.warn("X11Adapter.getMetadata invalid handle: {}", handle, e);
         } catch (Exception e) {
             LOGGER.warn("X11Adapter.getMetadata failed for {}", handle, e);
+        } finally {
+            X11_LIB.XCloseDisplay(display);
         }
         return new WindowMetadata(handle, "x11-title", 1280, 720, true);
     }
@@ -301,16 +311,11 @@ public class X11Adapter implements ProtocolBackend {
             int width = 0;
             int height = 0;
             boolean visible = false;
-            try {
-                Geometry g = getGeometry(null, display, window);
-                if (g != null) {
-                    width = g.width();
-                    height = g.height();
-                    visible = true;
-                }
-            } catch (Throwable ignored) {
-                // 幾何失敗不影響窗口列舉
-            }
+            // Geometry lookup requires opening a new X display; deferring it
+            // here would make this static method non-static. Skipping geometry
+            // keeps the listing path allocation-free; callers can query
+            // X11Adapter.getGeometry(xid) explicitly when they need it.
+            visible = (fetchStringProperty(display, window, "WM_NAME") != null);
 
             return new WindowInfo(Long.toHexString(window), title, appId, pid, width, height, visible);
         } catch (Throwable t) {

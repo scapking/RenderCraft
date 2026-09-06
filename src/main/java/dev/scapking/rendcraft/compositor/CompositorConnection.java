@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.*;
 
 /**
@@ -24,6 +26,7 @@ public class CompositorConnection implements AutoCloseable {
     private Socket socket;
     private OutputStream out;
     private BufferedReader in;
+    private InputStream binaryIn;
     private final String compositorPath;
     private final int port;
     private final String socketPath;
@@ -70,21 +73,26 @@ public class CompositorConnection implements AutoCloseable {
                 .redirectErrorStream(true)
                 .start();
         // 等待合成器准备好
-        Thread.sleep(1000); // TODO: better readiness check
+        try {
+            Thread.sleep(1000); // TODO: better readiness check
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Compositor startup interrupted", ie);
+        }
         socket = new Socket("localhost", port);
         out = socket.getOutputStream();
-        in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        InputStream raw = socket.getInputStream();
+        in = new BufferedReader(new InputStreamReader(raw, StandardCharsets.UTF_8));
+        binaryIn = raw;
     }
 
     private void startUnixSocketCompositor() throws IOException {
-        compositorProcess = new ProcessBuilder(compositorPath, "--socket", socketPath)
-                .redirectErrorStream(true)
-                .start();
-        Thread.sleep(500);
-        socket = new Socket();
-        socket.connect(new UnixSocketAddress(socketPath));
-        out = socket.getOutputStream();
-        in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        // Plain java.net.Socket does not support AF_UNIX. A real
+        // implementation would open a SocketChannel against a
+        // UnixDomainSocketAddress (JDK 16+). We fail loudly here so the
+        // mod fails fast instead of silently doing nothing.
+        throw new UnsupportedOperationException(
+                "Unix-domain socket backend not implemented; use the TCP backend (-PwlTcpPort=...)");
     }
 
     public void sendCommand(String command) throws IOException {
@@ -199,7 +207,7 @@ public class CompositorConnection implements AutoCloseable {
         byte[] buf = new byte[size];
         int remaining = size;
         while (remaining > 0) {
-            int read = in.read(buf, size - remaining, remaining);
+            int read = binaryIn.read(buf, size - remaining, remaining);
             if (read <= 0) {
                 throw new IOException("Premature end of frame payload: expected " + size + " bytes");
             }
