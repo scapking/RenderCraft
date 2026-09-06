@@ -51,6 +51,10 @@ jobs:
 
       - name: Verify jar contents
         if: ${{ !cancelled() }}
+        # Use bash explicitly on Windows so the script below doesn't get
+        # routed to PowerShell (the default on windows-* runners), which
+        # would reject the bash-only 'set -e' and '$(...)' idioms.
+        shell: bash
         run: |
           set -e
           JAR=$(ls -1 build/libs/*.jar 2>/dev/null | grep -v sources | head -n 1 || true)
@@ -92,10 +96,11 @@ jobs:
       - name: Build mod jar
         run: gradle build --no-daemon --console=plain
       - name: Headless X11 smoke test
-        # Use a throwaway class that calls listX11Windows(null). On a
-        # headless runner we expect libX11 to load but XOpenDisplay to
-        # return null — both branches in X11Adapter are exercised and
-        # we should see "0 windows" rather than an NPE.
+        # We need SLF4J (X11Adapter's static Logger field triggers it
+        # on class load) and JNA on the classpath alongside the mod
+        # jar. Manually building that classpath in the workflow YAML is
+        # fragile, so ask gradle to print the runtime classpath and
+        # then exec java with the resulting -cp.
         run: |
           mkdir -p /tmp/rendx11-check
           cat > /tmp/rendx11-check/Check.java <<'EOF'
@@ -107,7 +112,11 @@ jobs:
             }
           }
           EOF
-          JAR=$(ls -1 build/libs/*.jar | grep -v sources | head -n 1)
-          echo "Using jar: $JAR"
-          javac -cp "$JAR" -d /tmp/rendx11-check /tmp/rendx11-check/Check.java
-          java -cp "/tmp/rendx11-check:$JAR" Check
+          CP="build/classes/java/main"
+          for j in $(gradle --no-daemon -q dependencies --configuration runtimeClasspath 2>/dev/null \
+            | grep -oE '[^[:space:]]+\.jar' | sort -u); do
+            CP="$CP:$j"
+          done
+          echo "Classpath entries: $(echo "$CP" | tr ':' '\n' | wc -l)"
+          javac -cp "$CP" -d /tmp/rendx11-check /tmp/rendx11-check/Check.java
+          java -cp "/tmp/rendx11-check:$CP" Check
