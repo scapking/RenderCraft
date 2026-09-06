@@ -36,18 +36,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: temurin
 
-      - name: Setup Gradle (use system gradle; wrapper is not yet committed)
+      - name: Setup Gradle (via the now-committed wrapper)
+        # No more 'gradle-version' pin: the wrapper jar in
+        # gradle/wrapper/gradle-wrapper.jar is the single source of
+        # truth, and it downloads 9.1.0 the first time. After the
+        # first run on each runner the wrapper distribution is cached
+        # in GRADLE_USER_HOME.
         uses: gradle/actions/setup-gradle@v4
-        with:
-          # RenderCraft does not commit a gradle wrapper yet; pin to the
-          # version that loom 1.13-SNAPSHOT was developed against and
-          # that GitHub-hosted runners reliably cache.
-          gradle-version: '9.1.0'
 
       - name: Build (${{ matrix.os }}, jdk${{ matrix.java }})
-        # gradlew wrapper is not committed; invoke the gradle CLI directly.
-        # setup-gradle above adds the pinned gradle to PATH.
-        run: gradle build --no-daemon --console=plain
+        run: ./gradlew build --no-daemon --console=plain
+        shell: bash
 
       - name: Verify jar contents
         if: ${{ !cancelled() }}
@@ -94,10 +93,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libx11-6
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.1.0'
       - name: Build mod jar
-        run: gradle build --no-daemon --console=plain
+        run: ./gradlew build --no-daemon --console=plain
+        shell: bash
       - name: Headless X11 smoke test
         # SLF4J and JNA are 'provided' (or fabric-loader brings them in
         # at runtime), so the mod jar itself doesn't shade them. Look
