@@ -16,6 +16,13 @@ jobs:
   # Android/iOS are intentionally omitted: loom 1.13-SNAPSHOT does not produce
   # usable jars for them and Fabric Loader for those platforms is still
   # experimental — track in a separate workflow once the toolchain stabilises.
+
+  # Job-level permissions. The release job uses 'gh run download' to
+  # pull artefacts from sibling jobs, which needs actions: read in
+  # addition to the workflow-level contents: write above.
+  permissions:
+    contents: write
+    actions: read
   build-java:
     strategy:
       fail-fast: false
@@ -177,58 +184,93 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "mod_version=$VERSION"
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: jars
-          pattern: rendcraft-jar-*
-          # No merge-multiple: leave each artifact's jar flattened
-          # into jars/. With merge-multiple, every artifact is dropped
-          # into its own subdirectory and our *.jar glob would not
-          # match anything.
+      - name: Download build artifacts (one per matrix entry)
+        # actions/download-artifact with merge-multiple splits each
+        # named artefact into its own subdirectory, which means we
+        # need to glob jars/<name>/**/*.jar. We list the same artefact
+        # names the build job uploaded and pull them in individually
+        # so we end up with a flat jars/<name>/<file> structure that
+        # the rename step can iterate cleanly.
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -e
+          mkdir -p jars
+          for art in \
+            rendcraft-jar-ubuntu-24.04-jdk23 \
+            rendcraft-jar-ubuntu-24.04-arm-jdk23 \
+            rendcraft-jar-windows-2022-jdk23 \
+            rendcraft-jar-windows-11-arm-jdk23 \
+            rendcraft-jar-macos-15-jdk23; do
+            echo "=== pulling $art ==="
+            gh run download "$GITHUB_RUN_ID" --name "$art" --dir "jars/$art" \
+              || echo "WARN: failed to download $art (continuing)"
+          done
+          echo
+          echo "=== flattened download tree ==="
+          find jars -maxdepth 3 -type f | sort
 
       - name: List and rename jars
         run: |
           set -e
           cd jars
-          echo "=== downloaded artefacts ==="
-          ls -la
+          echo "=== downloaded tree ==="
+          find . -type f | sort
           echo
           echo "=== renaming ==="
-          for f in *.jar; do
-            [ -f "$f" ] || continue
+          for f in $(find . -name '*.jar' -not -name '*-sources.jar'); do
             base=$(basename "$f")
-            # Accept the old (rendcraft-<os>-jdk<java>), the new
-            # (rendcraft-jar-<os>-jdk<java>), or the loom-renamed
-            # (RenderCraft-<ver>.jar) upload names. Everything funnels
-            # to rendcraft-<version>-<os>.jar; if we cannot infer the
-            # OS we fall back to the OS matrix from GITHUB_REF_NAME
-            # (the tag we are releasing for). The 'all' fallback covers
-            # the case where the build was a single non-matrix run
-            # (workflow_dispatch with a single OS).
+            dir=$(dirname "$f")
+            # The download step dropped each artefact into its own
+            # subdirectory named after the upload's 'name' field
+            # (e.g. jars/rendcraft-jar-ubuntu-24.04-jdk23/...). Pull
+            # the OS out of either the directory name or the file
+            # name, then rewrite the whole thing to
+            # rendcraft-<version>-<os>.jar.
             os=""
-            case "$base" in
-              rendcraft-jar-*-jdk[0-9]*.jar)
-                os=$(echo "$base" | sed -E 's/^rendcraft-jar-(.+)-jdk[0-9]+\.jar$/\1/') ;;
-              rendcraft-*-jdk[0-9]*.jar)
-                os=$(echo "$base" | sed -E 's/^rendcraft-(.+)-jdk[0-9]+\.jar$/\1/') ;;
-              RenderCraft-*.jar|RenderCraft-*-sources.jar)
-                os="all" ;;
-            esac
+            # Prefer the directory name: rendcraft-jar-<os>-jdk<java>
+            if [[ "$dir" =~ rendcraft-jar-(.+)-jdk[0-9]+ ]]; then
+              os="${BASH_REMATCH[1]}"
+            fi
             if [ -z "$os" ]; then
-              echo "WARNING: cannot infer OS from '$base', using 'all'"
+              # Fall back to file name: rendcraft-jar-<os>-jdk<java>.jar
+              if [[ "$base" =~ rendcraft-jar-(.+)-jdk[0-9]+\.jar$ ]]; then
+                os="${BASH_REMATCH[1]}"
+              elif [[ "$base" =~ rendcraft-(.+)-jdk[0-9]+\.jar$ ]]; then
+                os="${BASH_REMATCH[1]}"
+              elif [[ "$base" =~ ^RenderCraft-.*\.jar$ ]]; then
+                os="all"
+              fi
+            fi
+            if [ -z "$os" ]; then
+              echo "WARN: cannot infer OS from '$f', using 'all'"
               os="all"
             fi
             target="rendcraft-${{ steps.ver.outputs.version }}-${os}.jar"
-            # If the build also produced a -sources.jar, preserve it as
-            # a sibling sources jar rather than overwriting the binary.
-            case "$base" in
-              *-sources.jar) target="${target%.jar}-sources.jar" ;;
-            esac
-            if [ "$f" = "$target" ]; then
-              echo "  $base (no rename needed)"
+            newpath="$target"
+            if [ "$f" = "$newpath" ]; then
+              echo "  $f (no rename needed)"
             else
-              echo "  $base -> $target"
+              echo "  $f -> $newpath"
+              mv "$f" "$newpath"
+            fi
+          done
+          # Sources jars: drop the jdk suffix to keep one per OS
+          for f in $(find . -name '*-sources.jar'); do
+            base=$(basename "$f")
+            dir=$(dirname "$f")
+            os=""
+            if [[ "$dir" =~ rendcraft-jar-(.+)-jdk[0-9]+ ]]; then
+              os="${BASH_REMATCH[1]}"
+            fi
+            if [ -z "$os" ]; then
+              os="all"
+            fi
+            target="rendcraft-${{ steps.ver.outputs.version }}-${os}-sources.jar"
+            if [ "$f" = "$target" ]; then
+              echo "  $f (no rename needed)"
+            else
+              echo "  $f -> $target"
               mv "$f" "$target"
             fi
           done
@@ -238,7 +280,6 @@ jobs:
           echo
           echo "=== final sha256 ==="
           sha256sum *.jar
-          echo "$GITHUB_OUTPUT_PUT_REQUIRED" 2>/dev/null || true
 
       - name: Generate release notes
         env:
