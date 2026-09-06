@@ -30,8 +30,16 @@ public interface ProtocolBackend {
     /**
      * 捕获指定窗口的一帧，返回帧快照。
      * 若窗口不存在或当前不可捕获，抛出 ProtocolException。
+     * 默认实现返回 null，由子类覆盖。
      */
-    FrameSnapshot captureFrame(WindowHandle handle) throws ProtocolException;
+    default FrameSnapshot captureFrame(WindowHandle handle) throws ProtocolException {
+        throw new ProtocolException("captureFrame not implemented for " + getProtocolName());
+    }
+
+    /**
+     * 获取协议名称，用于日志和错误消息。
+     */
+    String getProtocolName();
 
     /**
      * 请求关闭指定窗口。

@@ -1,0 +1,107 @@
+name: Build RenderCraft
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  # Java-only build matrix covering all major desktop targets we ship jars for.
+  # Android/iOS are intentionally omitted: loom 1.13-SNAPSHOT does not produce
+  # usable jars for them and Fabric Loader for those platforms is still
+  # experimental — track in a separate workflow once the toolchain stabilises.
+  build-java:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-11-arm, macos-14, macos-15]
+        java: ['21', '25']
+    name: build (${{ matrix.os }}, jdk${{ matrix.java }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: temurin
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission to gradlew (Unix)
+        if: ${{ !startsWith(matrix.os, 'windows') }}
+        run: chmod +x ./gradlew
+
+      - name: Build (${{ matrix.os }}, jdk${{ matrix.java }})
+        run: ./gradlew build --no-daemon --console=plain
+
+      - name: Verify jar contents
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          JAR=$(ls -1 build/libs/*.jar 2>/dev/null | grep -v sources | head -n 1 || true)
+          if [ -z "$JAR" ]; then
+            echo "::error::No jar produced in build/libs/"
+            ls -la build/libs/ || true
+            exit 1
+          fi
+          echo "Built jar: $JAR"
+          jar tf "$JAR" | head -40
+
+      - name: Upload jar
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendcraft-${{ matrix.os }}-jdk${{ matrix.java }}
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 14
+
+  # Sanity-check the X11 capture path on a Linux runner. We only need to
+  # prove that X11Adapter can be loaded by the JVM and that its lazy
+  # libX11 lookup does not throw on a host without a display — actual
+  # window capture still requires a running X server.
+  verify-x11:
+    name: verify-x11 (linux, headless)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: temurin
+      - name: Install libX11 runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-6
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build mod jar
+        run: ./gradlew build --no-daemon --console=plain
+      - name: Headless X11 smoke test
+        # Use a throwaway class that calls listX11Windows(null). On a
+        # headless runner we expect libX11 to load but XOpenDisplay to
+        # return null — both branches in X11Adapter are exercised and
+        # we should see "0 windows" rather than an NPE.
+        run: |
+          mkdir -p /tmp/rendx11-check
+          cat > /tmp/rendx11-check/Check.java <<'EOF'
+          import dev.scapking.rendcraft.protocol.X11Adapter;
+          public class Check {
+            public static void main(String[] a) {
+              var wins = X11Adapter.listX11Windows(null);
+              System.out.println("OK listX11Windows -> " + wins.size() + " windows");
+            }
+          }
+          EOF
+          JAR=$(ls -1 build/libs/*.jar | grep -v sources | head -n 1)
+          echo "Using jar: $JAR"
+          javac -cp "$JAR" -d /tmp/rendx11-check /tmp/rendx11-check/Check.java
+          java -cp "/tmp/rendx11-check:$JAR" Check
