@@ -187,24 +187,55 @@ jobs:
       - name: List and rename jars
         run: |
           set -e
-          ls -la jars/
+          cd jars
+          echo "=== downloaded artefacts ==="
+          ls -la
           echo
-          echo "=== final asset names ==="
-          for f in jars/*.jar; do
+          echo "=== renaming ==="
+          for f in *.jar; do
             [ -f "$f" ] || continue
-            name=$(basename "$f")
-            # Build job uploads as rendcraft-jar-<os>-jdk<java>; we
-            # rewrite to rendcraft-<version>-<os>.jar here so the
-            # release assets are version-tagged and the matrix column
-            # (jdk21 vs jdk23) is dropped — for a release we only
-            # care about the highest-tested per-OS build.
-            os=$(echo "$name" | sed -E 's/^rendcraft-jar-(.+)-jdk[0-9]+\.jar$/\1/')
-            mv "$f" "jars/rendcraft-${{ steps.ver.outputs.version }}-${os}.jar"
+            base=$(basename "$f")
+            # Accept the old (rendcraft-<os>-jdk<java>), the new
+            # (rendcraft-jar-<os>-jdk<java>), or the loom-renamed
+            # (RenderCraft-<ver>.jar) upload names. Everything funnels
+            # to rendcraft-<version>-<os>.jar; if we cannot infer the
+            # OS we fall back to the OS matrix from GITHUB_REF_NAME
+            # (the tag we are releasing for). The 'all' fallback covers
+            # the case where the build was a single non-matrix run
+            # (workflow_dispatch with a single OS).
+            os=""
+            case "$base" in
+              rendcraft-jar-*-jdk[0-9]*.jar)
+                os=$(echo "$base" | sed -E 's/^rendcraft-jar-(.+)-jdk[0-9]+\.jar$/\1/') ;;
+              rendcraft-*-jdk[0-9]*.jar)
+                os=$(echo "$base" | sed -E 's/^rendcraft-(.+)-jdk[0-9]+\.jar$/\1/') ;;
+              RenderCraft-*.jar|RenderCraft-*-sources.jar)
+                os="all" ;;
+            esac
+            if [ -z "$os" ]; then
+              echo "WARNING: cannot infer OS from '$base', using 'all'"
+              os="all"
+            fi
+            target="rendcraft-${{ steps.ver.outputs.version }}-${os}.jar"
+            # If the build also produced a -sources.jar, preserve it as
+            # a sibling sources jar rather than overwriting the binary.
+            case "$base" in
+              *-sources.jar) target="${target%.jar}-sources.jar" ;;
+            esac
+            if [ "$f" = "$target" ]; then
+              echo "  $base (no rename needed)"
+            else
+              echo "  $base -> $target"
+              mv "$f" "$target"
+            fi
           done
-          ls -la jars/
+          echo
+          echo "=== final jars/ ==="
+          ls -la
           echo
           echo "=== final sha256 ==="
-          sha256sum jars/*.jar
+          sha256sum *.jar
+          echo "$GITHUB_OUTPUT_PUT_REQUIRED" 2>/dev/null || true
 
       - name: Generate release notes
         env:
