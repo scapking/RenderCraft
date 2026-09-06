@@ -5,8 +5,6 @@ import dev.scapking.rendcraft.protocol.ProtocolBackend;
 import dev.scapking.rendcraft.protocol.ProtocolException;
 import dev.scapking.rendcraft.protocol.WindowHandle;
 import dev.scapking.rendcraft.protocol.WindowMetadata;
-import net.fabricmc.api.Environment;
-import net.fabricmc.api.EnvironmentAccessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,11 +12,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 窗口状态机实现。
- * 管理 ProtocolBackend 与 RenderCraft 上层之间的窗口状态。
+ * Thread-safe window state machine. Tracks each window the mod knows about
+ * (by {@link WindowHandle}) and forwards lifecycle requests to whichever
+ * {@link ProtocolBackend} is currently selected.
+ *
+ * <p>The legacy skeleton used {@code @Environment(Environment.Access.ThreadSafe)}
+ * and {@code implements EnvironmentAccessor}, both removed from
+ * fabric-loader 0.16. Concurrent state is provided by
+ * {@link ConcurrentHashMap} and a single writer thread per call site, which
+ * is enough for the &lt;100 windows we expect to manage at once.
  */
-@Environment(Environment.Access.ThreadSafe)
-public class WindowManager implements EnvironmentAccessor {
+public class WindowManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(WindowManager.class);
 
     private final Map<WindowHandle, WindowState> windowStates = new ConcurrentHashMap<>();
