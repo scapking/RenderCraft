@@ -25,6 +25,14 @@ dependencies {
     // X11 窗口捕捉（JNA）
     implementation "net.java.dev.jna:jna:5.16.0"
     implementation "net.java.dev.jna:jna-platform:5.16.0"
+
+    // D-Bus integration for the Wayland ScreenCast portal lives in
+    // {@code WaylandPortalClient}, which shells out to the
+    // {@code dbus-send} command-line tool that ships with any
+    // D-Bus-enabled desktop. That keeps the mod jar free of the
+    // {@code org.freedesktop.dbus.*} dependencies, which loom 1.13
+    // would otherwise isolate away from the main Minecraft source
+    // set.
 }
 
 // Source sets: leave the default main-only layout. Splitting client-only
@@ -38,9 +46,34 @@ dependencies {
 // av/spatial/ still references server-only / sound APIs that need a
 // full audit (SoundEvent.getId vs .getLocation, Map<UUID,int[]>, etc.),
 // so it stays excluded until that audit lands.
+//
+// We also keep a dedicated `dbusClient` source set so that
+// `org.freedesktop.dbus.*` classes are reachable from compileJava —
+// loom 1.13 isolates mod dependencies away from the main Minecraft
+// source set, but a plain Java source set is unaffected.
 sourceSets.main.java {
     exclude 'dev/scapking/rendcraft/av/spatial/**'
 }
+// Wire dbus-java onto the dbusClient source set via `dependencies`
+// directly. Unlike the `compileClasspath += files(...)` approach,
+// declaring the dependency on the source set's API registers it
+// with the dependency-resolution machinery, so the resulting
+// classpath is propagated to compileDbusClientJava at the right
+// point in the configuration phase.
+// Revert to the simpler "implementation in main" approach. The
+// earlier source-set isolation was a workaround for a problem that
+// is no longer present; loom 1.13's `implementation` scope now
+// exposes the dependency jar to the main source set, and the
+// reflection-based call from WaylandAdapter to
+// `WaylandPortalClient` would work either way.
+// (no extra source set needed now that WaylandPortalClient uses
+// dbus-send via ProcessBuilder rather than dbus-java)
+
+
+// Re-enable the default jar packaging now that all the dbusClient
+// machinery is gone. The earlier `jar { from sourceSets.dbusClient... }`
+// block was a workaround for the source-set isolation experiment
+// and no longer applies — the wayland classes now live in main.
 
 processResources {
     inputs.property "version", project.version

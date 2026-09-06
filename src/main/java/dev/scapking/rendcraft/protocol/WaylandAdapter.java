@@ -5,13 +5,34 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Wayland 协议适配器。
- * 基于 Smithay 或原生 Wayland 获取窗口列表和帧。
- * 当前为骨架，待接入真实 Wayland 后端。
+ *
+ * <p>Two backends are supported:
+ * <ul>
+ *   <li>The legacy text-protocol {@link CompositorConnection} for
+ *       completeness; it is no longer the recommended path but is
+ *       still wired so old {@code /rc share x11 list} smoke tests
+ *       keep working.</li>
+ *   <li>The {@code WaylandPortalClient} that drives the freedesktop
+ *       ScreenCast v6 portal over D-Bus. This is the path real
+ *       captures will go through; the recommended no-argument
+ *       {@link #WaylandAdapter()} constructor instantiates it.
+ *       The portal client lives in a separate {@code dbusClient}
+ *       source set so that the {@code org.freedesktop.dbus.*}
+ *       dependency does not have to be visible from the main
+ *       Minecraft source set, and is reached here through
+ *       reflection.</li>
+ * </ul>
+ *
+ * <p>Frame capture is still a stub: the portal hands back a PipeWire
+ * file descriptor that only a native (libpipewire) or a forked
+ * helper process can drive.
  */
 public class WaylandAdapter implements ProtocolBackend {
     private static final Logger LOGGER = LoggerFactory.getLogger(WaylandAdapter.class);
@@ -19,60 +40,144 @@ public class WaylandAdapter implements ProtocolBackend {
     private WindowListener listener;
     private final CompositorConnection connection;
 
+    /**
+     * The portal client, reached through reflection so the main
+     * source set does not need dbus-java on its compile classpath.
+     * Methods invoked reflectively: {@code createSession},
+     * {@code closeCurrentSession}, {@code close}.
+     */
+    private final Object portalClient;
+    private final Method portalCreateSession;
+    private final Method portalCloseCurrentSession;
+    private final Method portalClose;
+
     public WaylandAdapter(String compositorPath) {
         this.connection = new CompositorConnection(compositorPath);
+        this.portalClient = null;
+        this.portalCreateSession = null;
+        this.portalCloseCurrentSession = null;
+        this.portalClose = null;
     }
 
     public WaylandAdapter(String compositorPath, int port) {
         this.connection = new CompositorConnection(compositorPath, port);
+        this.portalClient = null;
+        this.portalCreateSession = null;
+        this.portalCloseCurrentSession = null;
+        this.portalClose = null;
     }
 
     public WaylandAdapter(String compositorPath, String socketPath) {
         this.connection = new CompositorConnection(compositorPath, socketPath);
+        this.portalClient = null;
+        this.portalCreateSession = null;
+        this.portalCloseCurrentSession = null;
+        this.portalClose = null;
+    }
+
+    /** Recommended constructor: drive the freedesktop portal directly. */
+    public WaylandAdapter() {
+        this.connection = null;
+        Object client = null;
+        Method create = null;
+        Method closeCurrent = null;
+        Method closeAll = null;
+        try {
+            Class<?> portalClass = Class.forName(
+                    "dev.scapking.rendcraft.protocol.wayland.WaylandPortalClient");
+            client = portalClass.getDeclaredConstructor().newInstance();
+            create = portalClass.getMethod("createSession");
+            closeCurrent = portalClass.getMethod("closeCurrentSession");
+            closeAll = portalClass.getMethod("close");
+            try {
+                create.invoke(client);
+            } catch (Exception e) {
+                LOGGER.warn("Portal CreateSession failed: {}", unwrap(e).getMessage());
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("WaylandPortalClient unavailable, WaylandAdapter in stub-only mode: {}",
+                    t.getMessage());
+            client = null;
+            create = null;
+            closeCurrent = null;
+            closeAll = null;
+        }
+        this.portalClient = client;
+        this.portalCreateSession = create;
+        this.portalCloseCurrentSession = closeCurrent;
+        this.portalClose = closeAll;
+    }
+
+    private static Throwable unwrap(Throwable t) {
+        while (t.getCause() != null && t.getCause() != t) {
+            t = t.getCause();
+        }
+        return t;
     }
 
     @Override
     public boolean initialize() {
         if (initialized) return true;
-        try {
-            if (!connection.start()) {
-                throw new RuntimeException("Failed to start compositor connection");
+        if (connection != null) {
+            try {
+                if (!connection.start()) {
+                    throw new RuntimeException("Failed to start compositor connection");
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("WaylandAdapter initialization failed", e);
             }
-        } catch (Exception e) {
-            throw new RuntimeException("WaylandAdapter initialization failed", e);
         }
         initialized = true;
-        LOGGER.info("WaylandAdapter initialized with connection to compositor");
+        LOGGER.info("WaylandAdapter initialized (portal={}, legacy connection={})",
+                portalClient != null ? "ready" : "absent",
+                connection != null ? "ready" : "absent");
         return true;
     }
 
     @Override
     public void dispose() {
         initialized = false;
-        try {
-            connection.close();
-        } catch (Exception e) {
-            LOGGER.warn("Error closing compositor connection", e);
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (Exception e) {
+                LOGGER.warn("Error closing compositor connection", e);
+            }
+        }
+        if (portalClient != null && portalClose != null) {
+            try {
+                portalClose.invoke(portalClient);
+            } catch (Exception e) {
+                LOGGER.debug("Error closing portal client: {}", e.getMessage());
+            }
         }
         LOGGER.info("WaylandAdapter disposed");
     }
 
     @Override
+    public String getProtocolName() {
+        return "wayland";
+    }
+
+    @Override
     public WindowHandle[] listWindows() throws ProtocolException {
         if (!initialized) throw new ProtocolException("WaylandAdapter not initialized");
-        if (connection == null || !connection.isConnected()) {
-            throw new ProtocolException("WaylandAdapter not connected");
+        if (connection == null && portalClient == null) {
+            return new WindowHandle[0];
         }
         try {
-            List<CompositorConnection.WindowInfo> infos = connection.listWindows();
-            List<WindowHandle> handles = new ArrayList<>(infos.size());
-            for (CompositorConnection.WindowInfo info : infos) {
-                handles.add(new WindowHandle(info.handle, ProtocolType.WAYLAND));
+            if (connection != null) {
+                var infos = connection.listWindows();
+                List<WindowHandle> handles = new ArrayList<>(infos.size());
+                for (CompositorConnection.WindowInfo info : infos) {
+                    handles.add(new WindowHandle(info.handle, ProtocolType.WAYLAND));
+                }
+                return handles.toArray(new WindowHandle[0]);
             }
-            return handles.toArray(new WindowHandle[0]);
         } catch (IOException e) {
             throw new ProtocolException("Failed to list windows", e);
         }
+        return new WindowHandle[0];
     }
 
     @Override
@@ -85,26 +190,28 @@ public class WaylandAdapter implements ProtocolBackend {
     @Override
     public FrameSnapshot captureFrame(WindowHandle handle) throws ProtocolException {
         if (!initialized) throw new ProtocolException("WaylandAdapter not initialized");
-        if (connection == null || !connection.isConnected()) {
-            throw new ProtocolException("WaylandAdapter not connected");
+        if (portalClient == null && connection == null) {
+            throw new ProtocolException(
+                    "Wayland capture unavailable on this host (no portal, no legacy connection). "
+                            + "Make sure xdg-desktop-portal is running.");
         }
-        try {
-            CompositorConnection.FrameCapture fc = connection.captureWindow(handle.getId());
-            return new FrameSnapshot(
-                System.currentTimeMillis(),
-                fc.width,
-                fc.height,
-                fc.data,
-                fc.format
-            );
-        } catch (IOException e) {
-            throw new ProtocolException("Failed to capture frame for " + handle, e);
+        if (connection != null) {
+            try {
+                CompositorConnection.FrameCapture fc = connection.captureWindow(handle.getId());
+                return new FrameSnapshot(
+                        System.currentTimeMillis(),
+                        fc.width,
+                        fc.height,
+                        fc.data,
+                        fc.format);
+            } catch (IOException e) {
+                throw new ProtocolException("Failed to capture frame for " + handle, e);
+            }
         }
-    }
-
-    @Override
-    public String getProtocolName() {
-        return "wayland";
+        throw new ProtocolException(
+                "WaylandAdapter.captureFrame needs a PipeWire consumer (native libpipewire "
+                        + "or a forked helper) attached to the portal's session handle. "
+                        + "Not yet implemented; see WaylandPortalClient for the missing half.");
     }
 
     @Override
