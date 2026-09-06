@@ -182,7 +182,10 @@ jobs:
         with:
           path: jars
           pattern: rendcraft-jar-*
-          merge-multiple: true
+          # No merge-multiple: leave each artifact's jar flattened
+          # into jars/. With merge-multiple, every artifact is dropped
+          # into its own subdirectory and our *.jar glob would not
+          # match anything.
 
       - name: List and rename jars
         run: |
