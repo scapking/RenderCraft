@@ -151,6 +151,30 @@ public class WaylandPortalClient {
         }
     }
 
+    /**
+     * Grab the most recent compositor output as a stand-in for the
+     * PipeWire-fed frame. The portal session has already been opened
+     * by {@link #start(SessionHandle)}, so we know we are on a
+     * Wayland desktop with a portal; this just does the cheap path
+     * via <code>grim -t ppm -</code>.
+     */
+    public WaylandFrameGrabber.Frame captureFrame() throws PortalException {
+        WaylandFrameGrabber grabber = new WaylandFrameGrabber();
+        WaylandFrameGrabber.Frame frame;
+        try {
+            frame = grabber.tryGrabWithGrim();
+        } catch (WaylandFrameGrabber.GrabFailed e) {
+            throw new PortalException("Frame grab failed: " + e.getMessage(), e);
+        }
+        if (frame == null) {
+            throw new PortalException(
+                    "Neither grim nor another screencopy tool is on PATH; "
+                            + "install grim (or run on a wlroots-based desktop) "
+                            + "to enable Wayland capture.");
+        }
+        return frame;
+    }
+
     public void close() {
         closeCurrentSession();
     }

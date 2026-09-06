@@ -50,6 +50,7 @@ public class WaylandAdapter implements ProtocolBackend {
     private final Method portalCreateSession;
     private final Method portalCloseCurrentSession;
     private final Method portalClose;
+    private final Method portalCaptureFrame;
 
     public WaylandAdapter(String compositorPath) {
         this.connection = new CompositorConnection(compositorPath);
@@ -57,6 +58,7 @@ public class WaylandAdapter implements ProtocolBackend {
         this.portalCreateSession = null;
         this.portalCloseCurrentSession = null;
         this.portalClose = null;
+        this.portalCaptureFrame = null;
     }
 
     public WaylandAdapter(String compositorPath, int port) {
@@ -65,6 +67,7 @@ public class WaylandAdapter implements ProtocolBackend {
         this.portalCreateSession = null;
         this.portalCloseCurrentSession = null;
         this.portalClose = null;
+        this.portalCaptureFrame = null;
     }
 
     public WaylandAdapter(String compositorPath, String socketPath) {
@@ -73,6 +76,7 @@ public class WaylandAdapter implements ProtocolBackend {
         this.portalCreateSession = null;
         this.portalCloseCurrentSession = null;
         this.portalClose = null;
+        this.portalCaptureFrame = null;
     }
 
     /** Recommended constructor: drive the freedesktop portal directly. */
@@ -82,6 +86,7 @@ public class WaylandAdapter implements ProtocolBackend {
         Method create = null;
         Method closeCurrent = null;
         Method closeAll = null;
+        Method captureFrame = null;
         try {
             Class<?> portalClass = Class.forName(
                     "dev.scapking.rendcraft.protocol.wayland.WaylandPortalClient");
@@ -89,6 +94,7 @@ public class WaylandAdapter implements ProtocolBackend {
             create = portalClass.getMethod("createSession");
             closeCurrent = portalClass.getMethod("closeCurrentSession");
             closeAll = portalClass.getMethod("close");
+            captureFrame = portalClass.getMethod("captureFrame");
             try {
                 create.invoke(client);
             } catch (Exception e) {
@@ -101,11 +107,13 @@ public class WaylandAdapter implements ProtocolBackend {
             create = null;
             closeCurrent = null;
             closeAll = null;
+            captureFrame = null;
         }
         this.portalClient = client;
         this.portalCreateSession = create;
         this.portalCloseCurrentSession = closeCurrent;
         this.portalClose = closeAll;
+        this.portalCaptureFrame = captureFrame;
     }
 
     private static Throwable unwrap(Throwable t) {
@@ -208,10 +216,41 @@ public class WaylandAdapter implements ProtocolBackend {
                 throw new ProtocolException("Failed to capture frame for " + handle, e);
             }
         }
-        throw new ProtocolException(
-                "WaylandAdapter.captureFrame needs a PipeWire consumer (native libpipewire "
-                        + "or a forked helper) attached to the portal's session handle. "
-                        + "Not yet implemented; see WaylandPortalClient for the missing half.");
+        // Portal path: ask the portal client to grab a frame.
+        // WaylandPortalClient.captureFrame shells out to `grim` and
+        // parses the resulting PPM into an RGBA8 buffer, so we get
+        // a real FrameSnapshot here. If grim is not installed (e.g.
+        // on GNOME) the portal client raises a ProtocolException we
+        // pass through unchanged.
+        if (portalCaptureFrame == null) {
+            throw new ProtocolException(
+                "WaylandAdapter.captureFrame has no portal client bound. "
+                    + "Construct via new WaylandAdapter() so the dbus-send "
+                    + "and grim paths are wired up.");
+        }
+        try {
+            Object rawFrame = portalCaptureFrame.invoke(portalClient);
+            if (!(rawFrame instanceof dev.scapking.rendcraft.protocol.wayland.WaylandFrameGrabber.Frame)) {
+                throw new ProtocolException(
+                        "Unexpected return type from WaylandPortalClient.captureFrame: "
+                                + (rawFrame == null ? "null" : rawFrame.getClass().getName()));
+            }
+            dev.scapking.rendcraft.protocol.wayland.WaylandFrameGrabber.Frame frame =
+                    (dev.scapking.rendcraft.protocol.wayland.WaylandFrameGrabber.Frame) rawFrame;
+            return new FrameSnapshot(
+                    System.currentTimeMillis(),
+                    frame.width(),
+                    frame.height(),
+                    frame.rgba(),
+                    "rgba");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new ProtocolException("Wayland frame capture failed: " + cause.getMessage(), cause);
+        } catch (IllegalAccessException e) {
+            throw new ProtocolException("Reflection error while invoking captureFrame", e);
+        } catch (Exception e) {
+            throw new ProtocolException("Unexpected error while invoking captureFrame", e);
+        }
     }
 
     @Override
