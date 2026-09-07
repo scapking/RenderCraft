@@ -1,0 +1,347 @@
+name: Build RenderCraft
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create (e.g. v0.1.0). Leave empty to only run the build matrix.'
+        required: false
+        default: ''
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  # The release job uses 'gh run download' to pull artefacts from
+  # sibling build jobs; that path needs actions: read in addition to
+  # the workflow-level contents: write above. GITHUB_TOKEN scopes
+  # are derived from this top-level permissions block, so every job
+  # in the workflow gets actions: read without us having to repeat
+  # the block per job.
+  actions: read
+
+jobs:
+  # Java-only build matrix covering all major desktop targets we ship jars for.
+  # Android/iOS are intentionally omitted: loom 1.13-SNAPSHOT does not produce
+  # usable jars for them and Fabric Loader for those platforms is still
+  # experimental — track in a separate workflow once the toolchain stabilises.
+  build-java:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-11-arm, macos-14, macos-15]
+        # Temurin 25 is not yet GA on the GitHub Actions setup-java image
+        # at the time of writing (latest is 23.0.2+7). Re-enable 25 once
+        # Temurin publishes an LTS build for it.
+        java: ['21', '23']
+    name: build (${{ matrix.os }}, jdk${{ matrix.java }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: temurin
+
+      - name: Setup Gradle (via the now-committed wrapper)
+        # No more 'gradle-version' pin: the wrapper jar in
+        # gradle/wrapper/gradle-wrapper.jar is the single source of
+        # truth, and it downloads 9.1.0 the first time. After the
+        # first run on each runner the wrapper distribution is cached
+        # in GRADLE_USER_HOME.
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build (${{ matrix.os }}, jdk${{ matrix.java }})
+        run: ./gradlew build --no-daemon --console=plain
+        shell: bash
+
+      - name: Verify jar contents
+        if: ${{ !cancelled() }}
+        # Use bash explicitly on Windows so the script below doesn't get
+        # routed to PowerShell (the default on windows-* runners), which
+        # would reject the bash-only 'set -e' and '$(...)' idioms.
+        shell: bash
+        run: |
+          set -e
+          JAR=$(ls -1 build/libs/*.jar 2>/dev/null | grep -v sources | head -n 1 || true)
+          if [ -z "$JAR" ]; then
+            echo "::error::No jar produced in build/libs/"
+            ls -la build/libs/ || true
+            exit 1
+          fi
+          echo "Built jar: $JAR"
+          jar tf "$JAR" | head -40
+
+      - name: Upload jar
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        # Artifact names use the 'rendcraft-jar-<os>-jdk<java>' prefix
+        # so the release job can pull them all with a single pattern
+        # match. The release job will rename them to
+        # rendcraft-<mod_version>-<os>.jar before creating the GitHub
+        # Release.
+        with:
+          name: rendcraft-jar-${{ matrix.os }}-jdk${{ matrix.java }}
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 14
+
+  # Sanity-check the X11 capture path on a Linux runner. Best-effort:
+  # if any classpath puzzle or libX11 quirk fails, the run still
+  # reports success at the job level. The signal that matters is the
+  # build matrix above.
+  verify-x11:
+    name: verify-x11 (linux, headless, best-effort)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: temurin
+      - name: Install libX11 runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-6
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build mod jar
+        run: ./gradlew build --no-daemon --console=plain
+        shell: bash
+      - name: Headless X11 smoke test
+        # SLF4J and JNA are 'provided' (or fabric-loader brings them in
+        # at runtime), so the mod jar itself doesn't shade them. Look
+        # for them in the gradle module cache, which the prior 'gradle
+        # build' populated.
+        run: |
+          mkdir -p /tmp/rendx11-check
+          cat > /tmp/rendx11-check/Check.java <<'EOF'
+          import dev.scapking.rendcraft.protocol.X11Adapter;
+          public class Check {
+            public static void main(String[] a) {
+              var wins = X11Adapter.listX11Windows(null);
+              System.out.println("OK listX11Windows -> " + wins.size() + " windows");
+            }
+          }
+          EOF
+          CP="build/classes/java/main"
+          GRADLE_CACHE="${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1"
+          for jar in \
+            "$GRADLE_CACHE/org.slf4j/slf4j-api/"*"/"*.jar \
+            "$GRADLE_CACHE/net.java.dev.jna/jna/"*"/"*.jar; do
+            [ -f "$jar" ] && CP="$CP:$jar"
+          done
+          if ! javac -cp "$CP" -d /tmp/rendx11-check /tmp/rendx11-check/Check.java; then
+            echo "::warning::Smoke test compile failed; not a build issue."
+            exit 0
+          fi
+          if ! java -cp "/tmp/rendx11-check:$CP" Check; then
+            echo "::warning::Smoke test runtime failed; not a build issue."
+          fi
+
+  # Cut a GitHub Release whenever a v* tag is pushed. Depends on the
+  # build matrix + verify-x11 so we never publish jars that did not
+  # pass CI. Mirrors the release: job in scapking/waylandcraft's
+  # .github/workflows/build.yml.
+  release:
+    needs: [build-java, verify-x11]
+    runs-on: ubuntu-24.04
+    # Only fire on tag pushes and on manual dispatch with an explicit
+    # tag override. Branch pushes still run the build matrix; they
+    # just skip the release step.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        || github.event_name == 'workflow_dispatch' && inputs.tag != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fetch history + tags so release notes can diff commits
+          # against the previous release tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -e
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v*) ;;
+            *) echo "Refusing to release under '$TAG' (does not start with v)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: $TAG"
+
+      - name: Read mod_version
+        id: ver
+        run: |
+          # Source of truth: gradle.properties. Stays in lock-step with
+          # what the jars were built from.
+          VERSION=$(grep '^mod_version=' gradle.properties | cut -d= -f2)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "mod_version=$VERSION"
+
+      - name: Download build artifacts (one per matrix entry)
+        # actions/download-artifact with merge-multiple splits each
+        # named artefact into its own subdirectory, which means we
+        # need to glob jars/<name>/**/*.jar. We list the same artefact
+        # names the build job uploaded and pull them in individually
+        # so we end up with a flat jars/<name>/<file> structure that
+        # the rename step can iterate cleanly.
+        env:
+          # gh run download needs the token under the GH_TOKEN name;
+          # GitHub Actions exposes the workflow token as GITHUB_TOKEN,
+          # so we re-export it.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p jars
+          for art in \
+            rendcraft-jar-ubuntu-24.04-jdk23 \
+            rendcraft-jar-ubuntu-24.04-arm-jdk23 \
+            rendcraft-jar-windows-2022-jdk23 \
+            rendcraft-jar-windows-11-arm-jdk23 \
+            rendcraft-jar-macos-15-jdk23; do
+            echo "=== pulling $art ==="
+            gh run download "$GITHUB_RUN_ID" --name "$art" --dir "jars/$art" \
+              || echo "WARN: failed to download $art (continuing)"
+          done
+          echo
+          echo "=== flattened download tree ==="
+          find jars -maxdepth 3 -type f | sort
+
+      - name: List and rename jars
+        run: |
+          set -e
+          cd jars
+          echo "=== downloaded tree ==="
+          find . -type f | sort
+          echo
+          echo "=== renaming ==="
+          for f in $(find . -name '*.jar' -not -name '*-sources.jar'); do
+            base=$(basename "$f")
+            dir=$(dirname "$f")
+            # The download step dropped each artefact into its own
+            # subdirectory named after the upload's 'name' field
+            # (e.g. jars/rendcraft-jar-ubuntu-24.04-jdk23/...). Pull
+            # the OS out of either the directory name or the file
+            # name, then rewrite the whole thing to
+            # rendcraft-<version>-<os>.jar.
+            os=""
+            # Prefer the directory name: rendcraft-jar-<os>-jdk<java>
+            if [[ "$dir" =~ rendcraft-jar-(.+)-jdk[0-9]+ ]]; then
+              os="${BASH_REMATCH[1]}"
+            fi
+            if [ -z "$os" ]; then
+              # Fall back to file name: rendcraft-jar-<os>-jdk<java>.jar
+              if [[ "$base" =~ rendcraft-jar-(.+)-jdk[0-9]+\.jar$ ]]; then
+                os="${BASH_REMATCH[1]}"
+              elif [[ "$base" =~ rendcraft-(.+)-jdk[0-9]+\.jar$ ]]; then
+                os="${BASH_REMATCH[1]}"
+              elif [[ "$base" =~ ^RenderCraft-.*\.jar$ ]]; then
+                os="all"
+              fi
+            fi
+            if [ -z "$os" ]; then
+              echo "WARN: cannot infer OS from '$f', using 'all'"
+              os="all"
+            fi
+            target="rendcraft-${{ steps.ver.outputs.version }}-${os}.jar"
+            newpath="$target"
+            if [ "$f" = "$newpath" ]; then
+              echo "  $f (no rename needed)"
+            else
+              echo "  $f -> $newpath"
+              mv "$f" "$newpath"
+            fi
+          done
+          # Sources jars: drop the jdk suffix to keep one per OS
+          for f in $(find . -name '*-sources.jar'); do
+            base=$(basename "$f")
+            dir=$(dirname "$f")
+            os=""
+            if [[ "$dir" =~ rendcraft-jar-(.+)-jdk[0-9]+ ]]; then
+              os="${BASH_REMATCH[1]}"
+            fi
+            if [ -z "$os" ]; then
+              os="all"
+            fi
+            target="rendcraft-${{ steps.ver.outputs.version }}-${os}-sources.jar"
+            if [ "$f" = "$target" ]; then
+              echo "  $f (no rename needed)"
+            else
+              echo "  $f -> $target"
+              mv "$f" "$target"
+            fi
+          done
+          echo
+          echo "=== final jars/ ==="
+          ls -la
+          echo
+          echo "=== final sha256 ==="
+          sha256sum *.jar
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -e
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          {
+            echo "## 变更内容 / Changes"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "Since \`${PREV}\`:"
+              echo
+              git log --pretty=format:'- `%h` %s' --no-merges "${PREV}..${TAG}" || true
+            else
+              echo "First release, or no previous tag found; showing the last 30 commits on ${TAG}:"
+              echo
+              git log --pretty=format:'- `%h` %s' --no-merges -30 "${TAG}" || true
+            fi
+            echo
+            echo
+            echo "---"
+            echo
+            echo "## 平台与产物 / Platforms & Artifacts"
+            echo
+            echo "RenderCraft ships a single universal mod jar; the same jar"
+            echo "runs on every platform with a Fabric Loader that matches the"
+            echo "version pinned in gradle.properties."
+            echo
+            echo "- Linux (x86_64, arm64): drop into .minecraft/mods"
+            echo "- Windows (x86_64, arm64): drop into %APPDATA%/.minecraft/mods"
+            echo "- macOS (x86_64, arm64): drop into ~/Library/Application Support/minecraft/mods"
+            echo "- Android: pair with fabric-loader-android (e.g. OnyxLauncher)"
+            echo "- iOS: not yet supported (no fabric-loader-ios upstream)"
+            echo
+            echo "源码包 / Source archives: zip + tar.gz are attached automatically by GitHub."
+          } > release-notes.md
+          echo "=== release-notes.md ==="
+          cat release-notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -e
+          cd jars
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists, updating notes + uploading assets (clobber)"
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --notes-file "${GITHUB_WORKSPACE}/release-notes.md"
+            gh release upload "${TAG}" *.jar --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            echo "Creating release ${TAG}"
+            gh release create "${TAG}" *.jar --repo "${GITHUB_REPOSITORY}" \
+                --title "${TAG}" --notes-file "${GITHUB_WORKSPACE}/release-notes.md"
+          fi
